@@ -72,11 +72,24 @@
           <label class="text-xs text-gray-500 mb-1 block">Название организации</label>
           <input v-model="form.buyer.companyName" placeholder='ТОО "Компания"' class="input-field" />
         </div>
-        <div class="flex gap-2">
-          <div class="flex-1">
-            <label class="text-xs text-gray-500 mb-1 block">БИН / ИИН</label>
-            <input v-model="form.buyer.bin" placeholder="123456789012" maxlength="12" class="input-field" />
-          </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">БИН / ИИН заказчика</label>
+          <input
+            v-model="form.buyer.bin"
+            placeholder="123456789012"
+            maxlength="12"
+            class="input-field"
+            :class="form.buyer.bin && form.buyer.bin.length !== 12 ? 'border-red-500' : ''"
+          />
+          <p v-if="form.buyer.bin && form.buyer.bin.length !== 12"
+             class="text-xs text-red-400 mt-1 flex items-center gap-1">
+            <i class="ti ti-alert-circle" />
+            БИН/ИИН должен содержать ровно 12 цифр (сейчас {{ form.buyer.bin.length }})
+          </p>
+          <p v-else-if="form.buyer.bin.length === 12"
+             class="text-xs text-green-400 mt-1 flex items-center gap-1">
+            <i class="ti ti-check" /> Верно
+          </p>
         </div>
         <div>
           <label class="text-xs text-gray-500 mb-1 block">Адрес</label>
