@@ -1,33 +1,43 @@
 <template>
   <div class="px-4 pt-12 pb-6">
 
-    <!-- ── ШАПКА ──────────────────────────────── -->
-    <div class="mb-5">
-      <p class="text-sm text-gray-500">Добрый день,</p>
-      <h1 class="text-xl font-medium text-white mt-0.5">{{ store.ip.name }} 👋</h1>
+    <!-- ── ШАПКА С ДАТОЙ ─────────────────────── -->
+    <div class="flex justify-between items-start mb-5">
+      <div>
+        <p class="text-sm text-gray-500">Добрый {{ greeting }},</p>
+        <h1 class="text-xl font-medium text-white mt-0.5">{{ store.ip.name }} 👋</h1>
+      </div>
+      <!-- Текущая дата — всегда видна -->
+      <div class="text-right">
+        <p class="text-sm font-medium text-white">{{ todayFormatted }}</p>
+        <p class="text-xs text-gray-500 mt-0.5">{{ dayOfWeek }}</p>
+      </div>
     </div>
 
-    <!-- ── УВЕДОМЛЕНИЕ О ЛИМИТЕ (появляется когда > 70%) ── -->
-    <!--
-      v-if: блок рендерится только если условие true.
-      Здесь: показываем предупреждение когда использовано больше 70% лимита
+    <!-- ── УВЕДОМЛЕНИЯ ────────────────────────
+         v-for по массиву alerts — каждый alert это объект с типом и текстом.
+         Показываем только если есть хотя бы одно уведомление.
     -->
-    <div
-      v-if="store.annualLimitPercent >= 70"
-      class="mb-4 rounded-2xl p-4 flex gap-3 items-start"
-      :class="store.annualLimitPercent >= 90 ? 'bg-red-900/30 border border-red-500/30' : 'bg-yellow-900/30 border border-yellow-500/30'"
-    >
-      <i
-        class="ti ti-alert-triangle text-xl mt-0.5 flex-shrink-0"
-        :class="store.annualLimitPercent >= 90 ? 'text-red-400' : 'text-yellow-400'"
-      />
-      <div>
-        <p class="text-sm font-medium" :class="store.annualLimitPercent >= 90 ? 'text-red-300' : 'text-yellow-300'">
-          {{ store.annualLimitPercent >= 90 ? '⚠️ Критично! Лимит почти исчерпан' : 'Внимание: приближаетесь к лимиту' }}
-        </p>
-        <p class="text-xs text-gray-400 mt-0.5">
-          Использовано {{ store.annualLimitPercent.toFixed(1) }}% от {{ formatKZT(store.annualLimitKZT) }}
-        </p>
+    <div v-if="alerts.length > 0" class="space-y-2 mb-4">
+      <div
+        v-for="alert in alerts"
+        :key="alert.id"
+        class="rounded-2xl p-4 flex gap-3 items-start"
+        :class="alert.bgClass"
+      >
+        <i :class="['ti', alert.icon, 'text-xl mt-0.5 flex-shrink-0', alert.iconColor]" />
+        <div class="flex-1">
+          <p class="text-sm font-medium" :class="alert.titleColor">{{ alert.title }}</p>
+          <p class="text-xs text-gray-400 mt-0.5">{{ alert.desc }}</p>
+        </div>
+        <!-- Дней осталось — бейдж -->
+        <span
+          v-if="alert.daysLeft !== undefined"
+          class="text-xs font-medium px-2 py-1 rounded-lg flex-shrink-0"
+          :class="alert.badgeClass"
+        >
+          {{ alert.daysLeft }}д
+        </span>
       </div>
     </div>
 
@@ -71,42 +81,21 @@
       </div>
     </div>
 
-    <!-- ── ГРАФИК ДОХОДОВ ПО МЕСЯЦАМ ─────────── -->
+    <!-- ── ГРАФИК ─────────────────────────────── -->
     <div class="bg-surface-card rounded-2xl p-4 mb-5">
       <p class="text-xs text-gray-500 mb-3 uppercase tracking-widest">Доходы за 6 месяцев</p>
-      <!--
-        SVG-график — рисуем прямо в HTML.
-        viewBox="0 0 300 80" = координатная сетка 300×80 единиц.
-        Каждый rect = столбик графика.
-        :height и :y вычисляются реактивно из данных store.
-      -->
       <svg viewBox="0 0 300 90" class="w-full" style="overflow: visible">
-        <!-- Столбики -->
         <g v-for="(bar, i) in chartBars" :key="i">
           <rect
-            :x="i * 50 + 5"
-            :y="90 - bar.height - 25"
-            width="38"
-            :height="bar.height"
+            :x="i * 50 + 5" :y="90 - bar.height - 25"
+            width="38" :height="bar.height"
             :fill="bar.isCurrentMonth ? '#6C63FF' : '#2a2a35'"
             rx="6"
           />
-          <!-- Сумма над столбиком -->
-          <text
-            :x="i * 50 + 24"
-            :y="90 - bar.height - 28"
-            text-anchor="middle"
-            fill="#9ca3af"
-            font-size="7"
-          >{{ bar.shortAmount }}</text>
-          <!-- Название месяца под столбиком -->
-          <text
-            :x="i * 50 + 24"
-            y="88"
-            text-anchor="middle"
-            fill="#6b7280"
-            font-size="8"
-          >{{ bar.month }}</text>
+          <text :x="i * 50 + 24" :y="90 - bar.height - 28"
+            text-anchor="middle" fill="#9ca3af" font-size="7">{{ bar.shortAmount }}</text>
+          <text :x="i * 50 + 24" y="88"
+            text-anchor="middle" fill="#6b7280" font-size="8">{{ bar.month }}</text>
         </g>
       </svg>
     </div>
@@ -154,30 +143,18 @@
           <div class="w-10 h-1 bg-gray-700 rounded-full mx-auto mb-5" />
           <h3 class="text-white font-medium mb-4">Добавить доход</h3>
           <div class="space-y-3">
-            <input
-              v-model="newTx.client"
-              placeholder="Название клиента"
+            <input v-model="newTx.client" placeholder="Название клиента"
               class="w-full bg-surface-border/50 text-white text-sm rounded-xl px-4 py-3
-                     border border-white/10 outline-none focus:border-brand"
-            />
-            <input
-              v-model="newTx.amount"
-              type="number"
-              placeholder="Сумма в тенге"
+                     border border-white/10 outline-none focus:border-brand" />
+            <input v-model="newTx.amount" type="number" placeholder="Сумма в тенге"
               class="w-full bg-surface-border/50 text-white text-sm rounded-xl px-4 py-3
-                     border border-white/10 outline-none focus:border-brand"
-            />
-            <input
-              v-model="newTx.date"
-              type="date"
+                     border border-white/10 outline-none focus:border-brand" />
+            <input v-model="newTx.date" type="date"
               class="w-full bg-surface-border/50 text-white text-sm rounded-xl px-4 py-3
-                     border border-white/10 outline-none focus:border-brand"
-            />
-            <select
-              v-model="newTx.category"
+                     border border-white/10 outline-none focus:border-brand" />
+            <select v-model="newTx.category"
               class="w-full bg-surface-border/50 text-white text-sm rounded-xl px-4 py-3
-                     border border-white/10 outline-none focus:border-brand"
-            >
+                     border border-white/10 outline-none focus:border-brand">
               <option value="Услуги">Услуги</option>
               <option value="Консалтинг">Консалтинг</option>
               <option value="Разработка">Разработка</option>
@@ -185,10 +162,8 @@
               <option value="Прочее">Прочее</option>
             </select>
           </div>
-          <button
-            @click="addTransaction"
-            class="w-full bg-brand text-white rounded-xl py-3.5 mt-4 font-medium text-sm active:opacity-90"
-          >
+          <button @click="addTransaction"
+            class="w-full bg-brand text-white rounded-xl py-3.5 mt-4 font-medium text-sm">
             Добавить операцию
           </button>
         </div>
@@ -204,23 +179,143 @@ import { useFinanceStore } from '@/stores/finance'
 
 const store = useFinanceStore()
 const showSheet = ref(false)
-const newTx = ref({
-  client: '',
-  amount: '',
-  category: 'Услуги',
-  date: new Date().toISOString().split('T')[0]  // Сегодняшняя дата по умолчанию
+const newTx = ref({ client: '', amount: '', category: 'Услуги', date: new Date().toISOString().split('T')[0] })
+
+// ── ДАТА И ПРИВЕТСТВИЕ ───────────────────────
+const now = new Date()
+
+// Приветствие по времени суток
+const greeting = computed(() => {
+  const h = now.getHours()
+  if (h < 12) return 'утро'
+  if (h < 17) return 'день'
+  return 'вечер'
 })
 
-// ── НАЛОГОВЫЕ КАРТОЧКИ ────────────────────────
+// Сегодняшняя дата: "19 июня 2026"
+const todayFormatted = computed(() =>
+  now.toLocaleString('ru', { day: 'numeric', month: 'long', year: 'numeric' })
+)
+
+// День недели: "Пятница"
+const dayOfWeek = computed(() =>
+  now.toLocaleString('ru', { weekday: 'long' })
+)
+
+// ── УМНЫЕ УВЕДОМЛЕНИЯ ────────────────────────
+//
+// Логика: считаем сколько дней до следующего 25-го числа (ОПВ/СО/ВОСМС)
+// и до дат сдачи декларации ф.910 (15 авг и 15 фев).
+// Если осталось ≤ 7 дней → красное уведомление
+// Если осталось ≤ 3 дней → критическое уведомление
+
+// Функция: сколько дней до заданной даты
+function daysUntil(targetDate) {
+  const diff = targetDate - now
+  return Math.ceil(diff / (1000 * 60 * 60 * 24))
+}
+
+// Следующее 25-е число (дедлайн ОПВ/СО/ВОСМС)
+function nextDeadlineDay(dayOfMonth) {
+  const target = new Date(now.getFullYear(), now.getMonth(), dayOfMonth)
+  if (target <= now) {
+    // Если уже прошло — берём следующий месяц
+    target.setMonth(target.getMonth() + 1)
+  }
+  return target
+}
+
+const alerts = computed(() => {
+  const result = []
+
+  // 1. Ежемесячные платежи — 25 число
+  const next25 = nextDeadlineDay(25)
+  const days25 = daysUntil(next25)
+
+  if (days25 <= 7) {
+    result.push({
+      id: 'monthly',
+      title: days25 <= 3 ? '🚨 Срочно! Уплата налогов' : '⏰ Скоро уплата налогов',
+      desc: `ОПВ + СО + ВОСМС до 25 числа · осталось ${days25} дн.`,
+      daysLeft: days25,
+      icon: 'ti-clock',
+      iconColor: days25 <= 3 ? 'text-red-400' : 'text-yellow-400',
+      titleColor: days25 <= 3 ? 'text-red-300' : 'text-yellow-300',
+      bgClass: days25 <= 3 ? 'bg-red-900/30 border border-red-500/30' : 'bg-yellow-900/30 border border-yellow-500/30',
+      badgeClass: days25 <= 3 ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'
+    })
+  }
+
+  // 2. Декларация ф.910 за 1-е полугодие — 15 августа
+  const aug15 = new Date(now.getFullYear(), 7, 15)
+  const daysAug = daysUntil(aug15)
+  if (daysAug > 0 && daysAug <= 7) {
+    result.push({
+      id: 'form910_1',
+      title: '📋 Декларация ф.910',
+      desc: `Сдать за 1-е полугодие до 15 августа · ${daysAug} дн.`,
+      daysLeft: daysAug,
+      icon: 'ti-file-text',
+      iconColor: 'text-blue-400',
+      titleColor: 'text-blue-300',
+      bgClass: 'bg-blue-900/30 border border-blue-500/30',
+      badgeClass: 'bg-blue-500/20 text-blue-400'
+    })
+  }
+
+  // 3. Уплата ИПН за 1-е полугодие — 25 августа
+  const aug25 = new Date(now.getFullYear(), 7, 25)
+  const daysAug25 = daysUntil(aug25)
+  if (daysAug25 > 0 && daysAug25 <= 7) {
+    result.push({
+      id: 'ipn_1',
+      title: '💰 Уплата ИПН',
+      desc: `ИПН за 1-е полугодие до 25 августа · ${daysAug25} дн.`,
+      daysLeft: daysAug25,
+      icon: 'ti-currency-tenge',
+      iconColor: 'text-green-400',
+      titleColor: 'text-green-300',
+      bgClass: 'bg-green-900/30 border border-green-500/30',
+      badgeClass: 'bg-green-500/20 text-green-400'
+    })
+  }
+
+  // 4. Лимит дохода
+  if (store.annualLimitPercent >= 90) {
+    result.push({
+      id: 'limit',
+      title: '⚠️ Лимит дохода почти исчерпан',
+      desc: `Использовано ${store.annualLimitPercent.toFixed(1)}% от годового лимита`,
+      icon: 'ti-alert-triangle',
+      iconColor: 'text-red-400',
+      titleColor: 'text-red-300',
+      bgClass: 'bg-red-900/30 border border-red-500/30',
+      badgeClass: ''
+    })
+  } else if (store.annualLimitPercent >= 70) {
+    result.push({
+      id: 'limit_warn',
+      title: 'Приближаетесь к лимиту дохода',
+      desc: `Использовано ${store.annualLimitPercent.toFixed(1)}% от ${formatKZT(store.annualLimitKZT)}`,
+      icon: 'ti-alert-triangle',
+      iconColor: 'text-yellow-400',
+      titleColor: 'text-yellow-300',
+      bgClass: 'bg-yellow-900/30 border border-yellow-500/30',
+      badgeClass: ''
+    })
+  }
+
+  return result
+})
+
+// ── ОСТАЛЬНОЕ (без изменений) ─────────────────
 const taxes = computed(() => [
-  { label: 'ИПН 3%',   value: store.monthlyTax, icon: 'ti-chart-pie',    color: '#818cf8' },
+  { label: 'ИПН 3%',   value: store.monthlyTax, icon: 'ti-chart-pie',     color: '#818cf8' },
   { label: 'ОПВ 10%',  value: store.opv,         icon: 'ti-building-bank', color: '#34d399' },
   { label: 'СО 3.5%',  value: store.so,           icon: 'ti-shield-check', color: '#60a5fa' },
   { label: 'ВОСМС 5%', value: store.vosms,        icon: 'ti-heart',        color: '#f87171' }
 ])
 
-// ── ЦВЕТ ПРОГРЕСС-БАРА В ЗАВИСИМОСТИ ОТ % ────
-// computed: пересчитывается автоматически при изменении store
 const limitColor = computed(() => {
   if (store.annualLimitPercent >= 90) return 'text-red-400'
   if (store.annualLimitPercent >= 70) return 'text-yellow-400'
@@ -232,44 +327,27 @@ const limitBarColor = computed(() => {
   return 'bg-brand'
 })
 
-// ── ДАННЫЕ ДЛЯ ГРАФИКА (последние 6 месяцев) ─
 const chartBars = computed(() => {
   const months = []
-  const now = new Date()
-
   for (let i = 5; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const monthIncome = store.transactions
-      .filter(t => {
-        const td = new Date(t.date)
-        return td.getMonth() === d.getMonth() && td.getFullYear() === d.getFullYear()
-      })
+    const income = store.transactions
+      .filter(t => { const td = new Date(t.date); return td.getMonth() === d.getMonth() && td.getFullYear() === d.getFullYear() })
       .reduce((sum, t) => sum + t.amount, 0)
-
-    months.push({
-      month: d.toLocaleString('ru', { month: 'short' }),  // "янв", "фев"...
-      income: monthIncome,
-      isCurrentMonth: i === 0
-    })
+    months.push({ month: d.toLocaleString('ru', { month: 'short' }), income, isCurrentMonth: i === 0 })
   }
-
-  // Максимальный доход → нужен чтобы масштабировать столбики
-  const maxIncome = Math.max(...months.map(m => m.income), 1)
-
+  const max = Math.max(...months.map(m => m.income), 1)
   return months.map(m => ({
     ...m,
-    // height: высота столбика от 4 до 55px пропорционально максимуму
-    height: m.income > 0 ? Math.max(4, (m.income / maxIncome) * 55) : 4,
-    // Короткая сумма: 820000 → "820к"
+    height: m.income > 0 ? Math.max(4, (m.income / max) * 55) : 4,
     shortAmount: m.income > 0 ? Math.round(m.income / 1000) + 'к' : ''
   }))
 })
 
 const currentMonth = computed(() =>
-  new Date().toLocaleString('ru', { month: 'long', year: 'numeric' })
+  now.toLocaleString('ru', { month: 'long', year: 'numeric' })
 )
 
-// ── МЕТОДЫ ───────────────────────────────────
 function addTransaction() {
   if (!newTx.value.client || !newTx.value.amount) return
   store.addTransaction(newTx.value)
@@ -277,8 +355,8 @@ function addTransaction() {
   showSheet.value = false
 }
 
-function formatKZT(amount) {
-  return new Intl.NumberFormat('ru-RU').format(Math.round(amount)) + ' ₸'
+function formatKZT(n) {
+  return new Intl.NumberFormat('ru-RU').format(Math.round(n)) + ' ₸'
 }
 
 function formatDate(dateStr) {
@@ -287,9 +365,7 @@ function formatDate(dateStr) {
 </script>
 
 <style scoped>
-.balance-card {
-  background: linear-gradient(135deg, #6C63FF, #4A43CC);
-}
+.balance-card { background: linear-gradient(135deg, #6C63FF, #4A43CC); }
 .sheet-enter-active, .sheet-leave-active { transition: opacity 0.25s ease; }
 .sheet-enter-active .relative, .sheet-leave-active .relative { transition: transform 0.25s ease; }
 .sheet-enter-from { opacity: 0; }
