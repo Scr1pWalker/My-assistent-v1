@@ -1,0 +1,37 @@
+/* Подключаем Tailwind CSS — три строки обязательны */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Глобальные стили — применяются ко всему приложению */
+body {
+  background-color: #0f0f13;  /* Тёмный фон как у Revolut */
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased; /* Сглаживание шрифтов на Mac/iOS */
+  overflow-x: hidden;
+}
+
+/* Убираем скролл у мобильного приложения */
+#app {
+  min-height: 100dvh; /* dvh = dynamic viewport height (учитывает клавиатуру) */
+  max-width: 430px;   /* Ширина как у iPhone 14 Pro Max */
+  margin: 0 auto;
+  position: relative;
+}
+
+/* Glassmorphism — эффект стекла для навигации */
+.glass {
+  background: rgba(19, 19, 26, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 0.5px solid rgba(255,255,255,0.08);
+}
+
+/* Плавные переходы между экранами */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.page-enter-from { opacity: 0; transform: translateY(8px); }
+.page-leave-to   { opacity: 0; transform: translateY(-8px); }
