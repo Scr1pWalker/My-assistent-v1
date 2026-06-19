@@ -168,14 +168,24 @@
     </div>
 
     <!-- Кнопка генерации -->
+    <!-- Ошибка подключения к серверу -->
+    <div v-if="genError" class="bg-red-900/30 border border-red-500/30 rounded-2xl p-3 mb-3 flex gap-2 items-start">
+      <i class="ti ti-alert-circle text-red-400 text-lg flex-shrink-0" />
+      <div>
+        <p class="text-xs text-red-300">{{ genError }}</p>
+        <p class="text-xs text-gray-500 mt-1">В терминале VS Code: <code class="text-brand">cd backend && uvicorn main:app --reload</code></p>
+      </div>
+    </div>
+
     <button
       @click="generatePDF"
-      :disabled="!isFormReady"
+      :disabled="!isFormReady || generating"
       class="w-full py-4 rounded-2xl font-medium text-sm transition-all flex items-center justify-center gap-2"
-      :class="isFormReady ? 'bg-brand text-white' : 'bg-surface-border/40 text-gray-600 cursor-not-allowed'"
+      :class="isFormReady && !generating ? 'bg-brand text-white' : 'bg-surface-border/40 text-gray-600 cursor-not-allowed'"
     >
-      <i class="ti ti-file-download text-lg" />
-      Скачать АВР · Форма Р-1 (PDF)
+      <i v-if="generating" class="ti ti-loader-2 text-lg animate-spin" />
+      <i v-else class="ti ti-file-download text-lg" />
+      {{ generating ? 'Генерирую PDF...' : 'Скачать АВР · Форма Р-1 (PDF)' }}
     </button>
     <p class="text-xs text-gray-700 text-center mt-2">
       Приложение 50 к приказу МФ РК от 20.12.2012 № 562
@@ -231,8 +241,13 @@ const isFormReady = computed(() =>
 function addServiceRow() { form.value.services.push(emptyService()) }
 function removeServiceRow(idx) { form.value.services.splice(idx, 1) }
 
-function generatePDF() {
-  // Форматируем дату: из yyyy-mm-dd в dd.mm.yyyy для PDF
+const generating = ref(false)
+const genError = ref('')
+
+async function generatePDF() {
+  generating.value = true
+  genError.value = ''
+
   const dateParts = form.value.date.split('-')
   const dateFormatted = dateParts.length === 3
     ? `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`
@@ -244,35 +259,39 @@ function generatePDF() {
     contract: form.value.contract,
     services: form.value.services.map(s => ({
       ...s,
-      qty:   Number(s.qty) || 1,
-      price: Number(s.price) || 0,
+      qty:      Number(s.qty) || 1,
+      price:    Number(s.price) || 0,
       workDate: s.workDate ? s.workDate.split('-').reverse().join('.') : ''
     })),
-    seller:   store.settings,
-    buyer:    form.value.buyer
+    seller: store.settings,
+    buyer:  form.value.buyer
   }
 
-  generateAvr(avrData)
+  try {
+    await generateAvr(avrData)
 
-  // Сохраняем в список
-  const newDoc = {
-    id:       Date.now(),
-    number:   form.value.number,
-    date:     dateFormatted,
-    buyer:    form.value.buyer.companyName,
-    amount:   totalAmount.value,
-    fullData: avrData
-  }
-  documents.value.unshift(newDoc)
-  saveDocs(documents.value)
+    const newDoc = {
+      id:       Date.now(),
+      number:   form.value.number,
+      date:     dateFormatted,
+      buyer:    form.value.buyer.companyName,
+      amount:   totalAmount.value,
+      fullData: avrData
+    }
+    documents.value.unshift(newDoc)
+    saveDocs(documents.value)
 
-  // Сброс формы
-  form.value = {
-    number:   String(nextNumber.value),
-    date:     new Date().toISOString().split('T')[0],
-    contract: '',
-    buyer:    { companyName: '', bin: '', address: '' },
-    services: [emptyService()]
+    form.value = {
+      number:   String(nextNumber.value),
+      date:     new Date().toISOString().split('T')[0],
+      contract: '',
+      buyer:    { companyName: '', bin: '', address: '' },
+      services: [emptyService()]
+    }
+  } catch (err) {
+    genError.value = 'Не удалось подключиться к серверу. Убедитесь что backend запущен (npm run backend)'
+  } finally {
+    generating.value = false
   }
 }
 
