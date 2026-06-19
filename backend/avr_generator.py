@@ -2,249 +2,334 @@
 АВР генератор — форма Р-1
 Приложение 50 к приказу МФ РК от 20.12.2012 № 562
 
-Копирует точную структуру оригинального шаблона:
-- Те же колонки (A..AW)
-- Те же merge cells
-- Тот же шрифт Arial
-- Та же разметка строк
+Динамические строки: сколько услуг — столько строк (без ограничений).
+Пустые строки не создаются.
 """
 
-import copy
-import os
-import subprocess
-import tempfile
+import os, copy, subprocess, tempfile, re
 from datetime import datetime
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "avr_template.xlsx")
 
+# ── Тонкая граница (как в оригинале) ─────────
+THIN = Side(style='thin')
 
-def create_template():
-    """Создаём шаблон один раз на основе оригинала"""
-    src = "/mnt/user-data/uploads/АВР_Сарыарка_Нан___04_от_31_03_2022.xlsx"
-    if os.path.exists(src):
-        import shutil
-        shutil.copy(src, TEMPLATE_PATH)
-        # Очищаем данные, оставляем структуру
-        wb = load_workbook(TEMPLATE_PATH)
-        ws = wb.active
-        # Очищаем только поля с данными
-        data_cells = [
-            'E9', 'AQ9',   # Заказчик: название, БИН
-            'E11', 'AQ11', # Исполнитель: название, БИН
-            'F13',         # Договор
-            'AH15', 'AM15', # Номер, дата
-            # Строки услуг 20-23
-            'C20','AD20','P20','AG20','AL20','AR20',
-            'C21','AD21','P21','AG21','AL21','AR21',
-            'C22','AD22','P22','AG22','AL22','AR22',
-            'C23','AD23','P23','AG23','AL23','AR23',
-            'AG24','AR24',
-            'S34',  # ФИО исполнителя
-            'AL37', # Дата подписания
-        ]
-        for addr in data_cells:
-            ws[addr] = None
-        wb.save(TEMPLATE_PATH)
-        print(f"Template created from original: {TEMPLATE_PATH}")
-    else:
-        print("Original not found, will create from scratch")
+def border(**sides):
+    return Border(
+        top=    sides.get('top'),
+        bottom= sides.get('bottom'),
+        left=   sides.get('left'),
+        right=  sides.get('right'),
+    )
+
+# Точные границы для каждой группы колонок строки услуги
+# (скопировано из оригинала)
+COL_BORDERS = {
+    'A':  border(top=THIN, bottom=THIN, left=THIN, right=THIN),   # №
+    'B':  border(top=THIN, bottom=THIN,             right=THIN),
+    # C..O — Наименование
+    'C':  border(top=THIN, bottom=THIN, left=THIN,  right=THIN),
+    **{c: border(top=THIN, bottom=THIN) for c in ['D','E','F','G','H','I','J','K','L','M','N','O']},
+    'O':  border(top=THIN, bottom=THIN,             right=THIN),
+    # P..T — Дата выполнения
+    'P':  border(top=THIN, bottom=THIN, left=THIN,  right=THIN),
+    **{c: border(top=THIN, bottom=THIN) for c in ['Q','R','S','T']},
+    'T':  border(top=THIN, bottom=THIN,             right=THIN),
+    # U..AC — Сведения об отчёте
+    'U':  border(top=THIN, bottom=THIN, left=THIN,  right=THIN),
+    **{c: border(top=THIN, bottom=THIN) for c in ['V','W','X','Y','Z','AA','AB','AC']},
+    'AC': border(top=THIN, bottom=THIN,             right=THIN),
+    # AD..AF — Единица измерения
+    'AD': border(top=THIN, bottom=THIN, left=THIN,  right=THIN),
+    'AE': border(top=THIN, bottom=THIN),
+    'AF': border(top=THIN, bottom=THIN,             right=THIN),
+    # AG..AK — Количество
+    'AG': border(top=THIN, bottom=THIN, left=THIN,  right=THIN),
+    **{c: border(top=THIN, bottom=THIN) for c in ['AH','AI','AJ','AK']},
+    'AK': border(top=THIN, bottom=THIN,             right=THIN),
+    # AL..AQ — Цена за единицу
+    'AL': border(top=THIN, bottom=THIN, left=THIN,  right=THIN),
+    **{c: border(top=THIN, bottom=THIN) for c in ['AM','AN','AO','AP','AQ']},
+    'AQ': border(top=THIN, bottom=THIN,             right=THIN),
+    # AR..AW — Стоимость
+    'AR': border(top=THIN, bottom=THIN, left=THIN,  right=THIN),
+    **{c: border(top=THIN, bottom=THIN) for c in ['AS','AT','AU','AV','AW']},
+    'AW': border(top=THIN, bottom=THIN,             right=THIN),
+}
+
+# Merge ranges для одной строки услуги (относительно строки)
+ROW_MERGES = [
+    ('A','B'),    # №
+    ('C','O'),    # Наименование
+    ('P','T'),    # Дата выполнения
+    ('U','AC'),   # Сведения об отчёте
+    ('AD','AF'),  # Единица измерения
+    ('AG','AK'),  # Количество
+    ('AL','AQ'),  # Цена за единицу
+    ('AR','AW'),  # Стоимость
+]
+
+def col_num(col_letter):
+    """A→1, B→2, AW→49"""
+    n = 0
+    for c in col_letter:
+        n = n * 26 + (ord(c) - ord('A') + 1)
+    return n
+
+
+def set_cell(ws, addr, value, bold=False, size=8, halign='center', valign='center', wrap=True, fmt=None):
+    cell = ws[addr]
+    cell.value = value
+    cell.font = Font(name='Arial', size=size, bold=bold)
+    cell.alignment = Alignment(horizontal=halign, vertical=valign, wrap_text=wrap)
+    if fmt:
+        cell.number_format = fmt
+
+
+def write_service_row(ws, row_num, idx, svc):
+    """Записывает одну строку услуги с правильными границами и merge"""
+
+    # 1. Снимаем все старые merge в этой строке (если есть)
+    to_remove = [m for m in ws.merged_cells.ranges
+                 if m.min_row <= row_num <= m.max_row
+                 and m.min_row == row_num]
+    for m in to_remove:
+        ws.merged_cells.remove(m)
+
+    # 2. Устанавливаем границы всем ячейкам строки
+    for col_letter, brd in COL_BORDERS.items():
+        col_idx = col_num(col_letter)
+        cell = ws.cell(row=row_num, column=col_idx)
+        cell.border = brd
+
+    # 3. Merge ячейки
+    for start_col, end_col in ROW_MERGES:
+        ws.merge_cells(f'{start_col}{row_num}:{end_col}{row_num}')
+
+    # 4. Высота строки
+    ws.row_dimensions[row_num].height = 21.75
+
+    # 5. Данные
+    qty   = float(svc.get('qty', 1) or 1)
+    price = float(svc.get('price', 0) or 0)
+
+    set_cell(ws, f'A{row_num}',  str(idx + 1),              halign='center')
+    set_cell(ws, f'C{row_num}',  svc.get('name', ''),       halign='left')
+    set_cell(ws, f'AD{row_num}', svc.get('unit', 'Услуга'), halign='center')
+    set_cell(ws, f'AG{row_num}', qty,                        halign='right', fmt='#,##0.##')
+    set_cell(ws, f'AL{row_num}', price,                      halign='right', fmt='#,##0.00')
+
+    # Сумма — формула Excel
+    ws[f'AR{row_num}'] = f'=AL{row_num}*AG{row_num}'
+    ws[f'AR{row_num}'].font      = Font(name='Arial', size=8)
+    ws[f'AR{row_num}'].alignment = Alignment(horizontal='right', vertical='center')
+    ws[f'AR{row_num}'].number_format = '#,##0.00'
+
+    # Дата выполнения
+    wd = svc.get('workDate', '')
+    if wd:
+        try:
+            wdt = datetime.strptime(wd, '%d.%m.%Y')
+            ws[f'P{row_num}'] = wdt
+            ws[f'P{row_num}'].number_format = 'DD.MM.YYYY'
+            ws[f'P{row_num}'].font      = Font(name='Arial', size=8)
+            ws[f'P{row_num}'].alignment = Alignment(horizontal='center', vertical='center')
+        except:
+            set_cell(ws, f'P{row_num}', wd, halign='center')
+
+    # Сведения об отчёте
+    ri = svc.get('reportInfo', '')
+    if ri:
+        set_cell(ws, f'U{row_num}', ri, halign='center')
+
+
+def shift_rows_down(ws, from_row, count):
+    """
+    Сдвигает строки вниз начиная с from_row на count позиций.
+    Используется когда услуг больше 4 (размер шаблона).
+    """
+    ws.insert_rows(from_row, amount=count)
 
 
 def generate_avr_xlsx(data: dict, output_path: str):
-    """
-    data = {
-        buyer: { companyName, bin, address }
-        seller: { companyName, bin, address, bankName, bankAccount, phone, signerName }
-        number: str
-        date: str (dd.mm.yyyy)
-        contract: str
-        services: [{ name, workDate, unit, qty, price, reportInfo }]
-    }
-    """
-    # Загружаем шаблон (оригинал)
-    if not os.path.exists(TEMPLATE_PATH):
-        create_template()
+    services = data.get('services', [])
+    n = len(services)
 
     wb = load_workbook(TEMPLATE_PATH)
     ws = wb.active
 
-    def set_cell(addr, value, bold=False, size=None, halign=None):
-        cell = ws[addr]
-        cell.value = value
-        if bold or size or halign:
-            f = cell.font
-            cell.font = Font(
-                name=f.name or 'Arial',
-                size=size or (f.size if f.size else 8),
-                bold=bold if bold else (f.bold or False)
-            )
-        if halign:
-            cell.alignment = Alignment(
-                horizontal=halign,
-                vertical='center',
-                wrap_text=True
-            )
-
-    # ── СТОРОНЫ ───────────────────────────────
-    buyer = data.get('buyer', {})
+    buyer  = data.get('buyer', {})
     seller = data.get('seller', {})
 
-    buyer_str = ', '.join(filter(None, [buyer.get('companyName',''), buyer.get('address','')]))
+    # ── Стороны ───────────────────────────────
+    buyer_str  = ', '.join(filter(None, [buyer.get('companyName',''),  buyer.get('address','')]))
     seller_str = ', '.join(filter(None, [seller.get('companyName',''), seller.get('address','')]))
 
-    set_cell('E9',  buyer_str,  bold=True, size=9, halign='center')
-    set_cell('AQ9', buyer.get('bin',''), bold=True, size=9, halign='center')
+    set_cell(ws, 'E9',   buyer_str,              bold=True, size=9, halign='center')
+    set_cell(ws, 'AQ9',  buyer.get('bin',''),    bold=True, size=9, halign='center')
+    set_cell(ws, 'E11',  seller_str,             bold=True, size=9, halign='center')
+    set_cell(ws, 'AQ11', seller.get('bin',''),   bold=True, size=9, halign='center')
 
-    set_cell('E11',  seller_str,  bold=True, size=9, halign='center')
-    set_cell('AQ11', seller.get('bin',''), bold=True, size=9, halign='center')
+    # ── Договор ───────────────────────────────
+    set_cell(ws, 'F13', data.get('contract',''), halign='left')
 
-    # ── ДОГОВОР ───────────────────────────────
-    set_cell('F13', data.get('contract',''), size=8)
-
-    # ── НОМЕР И ДАТА ──────────────────────────
-    set_cell('AH15', str(data.get('number', '1')), bold=True, size=8, halign='center')
-
+    # ── Номер и дата ──────────────────────────
+    set_cell(ws, 'AH15', str(data.get('number','1')), bold=True, halign='center')
     date_str = data.get('date', '')
     try:
-        # Конвертируем dd.mm.yyyy → datetime для Excel
         dt = datetime.strptime(date_str, '%d.%m.%Y')
         ws['AM15'] = dt
         ws['AM15'].number_format = 'DD.MM.YYYY'
         ws['AM15'].font = Font(name='Arial', size=8, bold=True)
         ws['AM15'].alignment = Alignment(horizontal='center', vertical='center')
     except:
-        set_cell('AM15', date_str, bold=True, size=8, halign='center')
+        set_cell(ws, 'AM15', date_str, bold=True, halign='center')
 
-    # ── УСЛУГИ ────────────────────────────────
-    services = data.get('services', [])
+    # ── Услуги ────────────────────────────────
+    # Шаблон имеет 4 строки (20-23) и строки после (24+).
+    # Нам нужно n строк. Если n < 4 — удаляем лишние.
+    # Если n > 4 — вставляем новые.
 
-    # Строки для услуг: 20, 21, 22, 23 (максимум 4 в шаблоне)
-    service_rows = [
-        {'num':'A20','name':'C20','date':'P20','info':'U20','unit':'AD20','qty':'AG20','price':'AL20','sum':'AR20'},
-        {'num':'A21','name':'C21','date':'P21','info':'U21','unit':'AD21','qty':'AG21','price':'AL21','sum':'AR21'},
-        {'num':'A22','name':'C22','date':'P22','info':'U22','unit':'AD22','qty':'AG22','price':'AL22','sum':'AR22'},
-        {'num':'A23','name':'C23','date':'P23','info':'U23','unit':'AD23','qty':'AG23','price':'AL23','sum':'AR23'},
-    ]
+    FIRST_SVC_ROW = 20
+    TEMPLATE_SVC_ROWS = 4  # в шаблоне строк 20,21,22,23
+    ITOGO_ROW = 24         # строка "Итого" в шаблоне
 
-    total_qty = 0
-    total_sum = 0
-    filled_rows = []
+    if n < TEMPLATE_SVC_ROWS:
+        # Удаляем лишние строки снизу (строки n+20 .. 23)
+        rows_to_delete = TEMPLATE_SVC_ROWS - n
+        delete_from = FIRST_SVC_ROW + n
+        ws.delete_rows(delete_from, rows_to_delete)
+        # Итого теперь на строке FIRST_SVC_ROW + n
+        itogo_row = FIRST_SVC_ROW + n
 
-    for i, svc in enumerate(services[:4]):
-        row = service_rows[i]
-        qty = float(svc.get('qty', 1) or 1)
-        price = float(svc.get('price', 0) or 0)
-        s = qty * price
-        total_qty += qty
-        total_sum += s
-        filled_rows.append(row)
+    elif n > TEMPLATE_SVC_ROWS:
+        # Вставляем дополнительные строки перед "Итого"
+        extra = n - TEMPLATE_SVC_ROWS
+        ws.insert_rows(ITOGO_ROW, extra)
+        itogo_row = ITOGO_ROW + extra
+    else:
+        itogo_row = ITOGO_ROW
 
-        set_cell(row['num'],   str(i+1),                size=8, halign='center')
-        set_cell(row['name'],  svc.get('name',''),       size=8, halign='left')
-        set_cell(row['unit'],  svc.get('unit','Услуга'), size=8, halign='center')
-        set_cell(row['qty'],   qty,                      size=8, halign='right')
-        set_cell(row['price'], price,                    size=8, halign='right')
+    # Записываем строки услуг
+    for i, svc in enumerate(services):
+        row_num = FIRST_SVC_ROW + i
+        write_service_row(ws, row_num, i, svc)
 
-        # Дата выполнения
-        wd = svc.get('workDate','')
-        if wd:
-            try:
-                wdt = datetime.strptime(wd, '%d.%m.%Y')
-                ws[row['date']] = wdt
-                ws[row['date']].number_format = 'DD.MM.YYYY'
-                ws[row['date']].font = Font(name='Arial', size=8)
-                ws[row['date']].alignment = Alignment(horizontal='center', vertical='center')
-            except:
-                set_cell(row['date'], wd, size=8, halign='center')
 
-        # Сведения об отчёте
-        set_cell(row.get('info', ''), svc.get('reportInfo',''), size=8, halign='center')
+    # ── Строка Итого ──────────────────────────
+    # Снимаем ВСЕ merge в строке итого
+    to_remove = [m for m in list(ws.merged_cells.ranges)
+                 if m.min_row == itogo_row]
+    for m in to_remove:
+        ws.merged_cells.remove(m)
 
-        # Сумма = формула Excel
-        row_num = 20 + i
-        ws[row['sum']] = f'=AL{row_num}*AG{row_num}'
-        ws[row['sum']].font = Font(name='Arial', size=8)
-        ws[row['sum']].alignment = Alignment(horizontal='right', vertical='center')
-        ws[row['sum']].number_format = '#,##0.00'
-        ws[row['price']].number_format = '#,##0.00'
+    # Устанавливаем границы
+    for col_idx in range(1, 50):
+        col_l = get_column_letter(col_idx)
+        ws.cell(row=itogo_row, column=col_idx).border = COL_BORDERS.get(
+            col_l, border(top=THIN, bottom=THIN))
 
-    # Итого — формулы
-    n = len(services[:4])
-    if n > 0:
-        qty_formula = '+'.join([f'AG{20+i}' for i in range(n)])
-        sum_formula = '+'.join([f'AR{20+i}' for i in range(n)])
-        ws['AG24'] = f'={qty_formula}'
-        ws['AR24'] = f'={sum_formula}'
-        ws['AG24'].font = Font(name='Arial', size=8)
-        ws['AG24'].alignment = Alignment(horizontal='right', vertical='center')
-        ws['AR24'].font = Font(name='Arial', size=8)
-        ws['AR24'].alignment = Alignment(horizontal='right', vertical='center')
-        ws['AR24'].number_format = '#,##0.00'
+    # Записываем значения ДО merge (иначе MergedCell — read-only)
+    first_r = FIRST_SVC_ROW
+    last_r  = FIRST_SVC_ROW + n - 1
 
-    # ── ПОДПИСИ ───────────────────────────────
-    signer = seller.get('signerName','')
-    set_cell('S34', signer, size=8)
+    ws.cell(row=itogo_row, column=32).value = 'Итого'   # AF
+    ws.cell(row=itogo_row, column=32).font = Font(name='Arial', size=8)
+    ws.cell(row=itogo_row, column=32).alignment = Alignment(horizontal='right', vertical='center')
+
+    ws.cell(row=itogo_row, column=38).value = 'х'       # AL
+    ws.cell(row=itogo_row, column=38).font = Font(name='Arial', size=8)
+    ws.cell(row=itogo_row, column=38).alignment = Alignment(horizontal='center', vertical='center')
+
+    ws.cell(row=itogo_row, column=33).value = f'=SUM(AG{first_r}:AG{last_r})'  # AG
+    ws.cell(row=itogo_row, column=33).font = Font(name='Arial', size=8)
+    ws.cell(row=itogo_row, column=33).alignment = Alignment(horizontal='right', vertical='center')
+
+    ws.cell(row=itogo_row, column=44).value = f'=SUM(AR{first_r}:AR{last_r})'  # AR
+    ws.cell(row=itogo_row, column=44).font = Font(name='Arial', size=8)
+    ws.cell(row=itogo_row, column=44).alignment = Alignment(horizontal='right', vertical='center')
+    ws.cell(row=itogo_row, column=44).number_format = '#,##0.00'
+
+    # Merge ПОСЛЕ записи значений
+    ws.merge_cells(f'A{itogo_row}:AE{itogo_row}')
+    ws.merge_cells(f'AF{itogo_row}:AK{itogo_row}')
+    ws.merge_cells(f'AL{itogo_row}:AQ{itogo_row}')
+    ws.merge_cells(f'AR{itogo_row}:AW{itogo_row}')
+
+
+    # ── Подписи ───────────────────────────────
+    # Строки подписей смещаются вместе с вставкой/удалением строк услуг
+    shift = n - TEMPLATE_SVC_ROWS  # может быть отрицательным
+
+    signer_row = 34 + shift
+    label_row  = 35 + shift
+    mp_row     = 37 + shift
+    mp2_row    = 39 + shift
+
+    signer = seller.get('signerName', '')
+    if signer:
+        set_cell(ws, f'S{signer_row}', signer, halign='left')
 
     # Дата подписания
     try:
         dt = datetime.strptime(date_str, '%d.%m.%Y')
-        ws['AL37'] = dt
-        ws['AL37'].number_format = 'DD.MM.YYYY'
-        ws['AL37'].font = Font(name='Arial', size=8)
-        ws['AL37'].alignment = Alignment(horizontal='center', vertical='center')
+        ws[f'AL{mp_row}'] = dt
+        ws[f'AL{mp_row}'].number_format = 'DD.MM.YYYY'
+        ws[f'AL{mp_row}'].font = Font(name='Arial', size=8)
+        ws[f'AL{mp_row}'].alignment = Alignment(horizontal='center', vertical='center')
     except:
-        set_cell('AL37', date_str, size=8, halign='center')
+        set_cell(ws, f'AL{mp_row}', date_str, halign='center')
 
     wb.save(output_path)
-    return output_path
 
 
 def xlsx_to_pdf(xlsx_path: str, pdf_path: str):
-    """Конвертация xlsx → pdf через LibreOffice"""
     out_dir = os.path.dirname(pdf_path)
-    result = subprocess.run(
+    subprocess.run(
         ['libreoffice', '--headless', '--convert-to', 'pdf',
          '--outdir', out_dir, xlsx_path],
         capture_output=True, text=True, timeout=30
     )
-    # LibreOffice сохраняет с тем же именем но .pdf
     generated = xlsx_path.replace('.xlsx', '.pdf')
     if os.path.exists(generated) and generated != pdf_path:
         os.rename(generated, pdf_path)
-    return pdf_path
 
 
 def generate_avr_pdf(data: dict) -> bytes:
-    """Главная функция: data → PDF bytes"""
     with tempfile.TemporaryDirectory() as tmpdir:
         xlsx_path = os.path.join(tmpdir, f"avr_{data.get('number','1')}.xlsx")
         pdf_path  = os.path.join(tmpdir, f"avr_{data.get('number','1')}.pdf")
-
         generate_avr_xlsx(data, xlsx_path)
         xlsx_to_pdf(xlsx_path, pdf_path)
-
         with open(pdf_path, 'rb') as f:
             return f.read()
 
 
 if __name__ == '__main__':
-    # Тест
-    create_template()
-    test_data = {
-        'number': '5',
-        'date': '19.06.2026',
+    # Тест с 2 услугами
+    test2 = {
+        'number': '5', 'date': '19.06.2026',
         'contract': '№ 1 от 01.01.2026',
-        'buyer':  { 'companyName': 'ТОО "Тест Компания"', 'bin': '123456789012', 'address': 'г. Алматы, ул. Абая 1' },
-        'seller': { 'companyName': 'ИП Иванов Иван', 'bin': '950121350285', 'address': 'г. Астана', 'signerName': 'Иванов И.И.' },
+        'buyer':  {'companyName': 'ТОО "Тест"', 'bin': '123456789012', 'address': 'г. Алматы'},
+        'seller': {'companyName': 'ИП Иванов', 'bin': '950121350285', 'address': 'г. Астана', 'signerName': 'Иванов И.И.'},
         'services': [
-            { 'name': 'Разработка мобильного приложения', 'unit': 'Услуга', 'qty': 1, 'price': 350000, 'workDate': '19.06.2026', 'reportInfo': '' },
-            { 'name': 'Техническая поддержка', 'unit': 'Месяц', 'qty': 3, 'price': 50000, 'workDate': '', 'reportInfo': '' },
+            {'name': 'Разработка приложения', 'unit': 'Услуга', 'qty': 1, 'price': 350000, 'workDate': '19.06.2026'},
+            {'name': 'Техподдержка', 'unit': 'Месяц', 'qty': 3, 'price': 50000, 'workDate': ''},
         ]
     }
-    pdf = generate_avr_pdf(test_data)
-    with open('/home/claude/test_avr.pdf', 'wb') as f:
-        f.write(pdf)
-    print(f"PDF generated: {len(pdf)} bytes → /home/claude/test_avr.pdf")
+    pdf = generate_avr_pdf(test2)
+    with open('/home/claude/test_avr_2rows.pdf', 'wb') as f: f.write(pdf)
+    print(f"2 services: {len(pdf)} bytes ✓")
+
+    # Тест с 6 услугами
+    test6 = {**test2, 'number': '6'}
+    test6['services'] = [
+        {'name': f'Услуга {i+1}', 'unit': 'Услуга', 'qty': i+1, 'price': 50000*(i+1), 'workDate': ''}
+        for i in range(6)
+    ]
+    pdf = generate_avr_pdf(test6)
+    with open('/home/claude/test_avr_6rows.pdf', 'wb') as f: f.write(pdf)
+    print(f"6 services: {len(pdf)} bytes ✓")
