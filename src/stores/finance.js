@@ -1,47 +1,79 @@
 // ─────────────────────────────────────────────
-// 📌 stores/finance.js — хранилище данных (Pinia)
+// 📌 stores/finance.js — хранилище данных
 //
-//    Pinia = глобальное хранилище.
-//    Данные здесь доступны из ЛЮБОГО компонента.
-//    Когда пользователь добавляет операцию в Accounting.vue,
-//    Dashboard.vue сразу видит обновлённую сумму — вот зачем store.
-//
-//    Структура store:
-//    state()     — данные (как data() в компоненте)
-//    getters     — вычисляемые значения (как computed)
-//    actions     — методы для изменения данных
+// Новое в этой версии:
+// - settings: данные ИП и налоговые параметры
+// - localStorage: данные сохраняются между перезагрузками
+//   (persist = сохранить). Без этого при F5 всё сбрасывается.
 // ─────────────────────────────────────────────
 
 import { defineStore } from 'pinia'
 
-// Константы налогового законодательства РК 2026
-const TAX_RATE         = 0.03      // ИПН для упрощенки: 3%
-const MRP_2026         = 3932      // МРП 2026 = 3 932 тенге
-const MZP_2026         = 85000     // МЗП 2026 = 85 000 тенге
-const ANNUAL_LIMIT_MRP = 24038     // Лимит дохода: 24 038 МРП
-const ANNUAL_LIMIT_KZT = ANNUAL_LIMIT_MRP * MRP_2026  // ≈ 94 565 416 тенге
+const MRP_2026 = 3932
+const ANNUAL_LIMIT_MRP = 24038
+
+// Загружаем сохранённые данные из localStorage
+// JSON.parse — превращаем строку обратно в объект
+function load(key, fallback) {
+  try {
+    const saved = localStorage.getItem(key)
+    return saved ? JSON.parse(saved) : fallback
+  } catch { return fallback }
+}
+
+// Сохраняем объект в localStorage
+// JSON.stringify — превращаем объект в строку для хранения
+function save(key, value) {
+  localStorage.setItem(key, JSON.stringify(value))
+}
 
 export const useFinanceStore = defineStore('finance', {
-  // ── STATE: данные приложения ──────────────────
   state: () => ({
-    // Профиль ИП
-    ip: {
-      name: 'Асель Нурова',
-      bin:  '123456789012',
-      regime: 'Упрощённая декларация'
-    },
+    // ── НАСТРОЙКИ ИП ───────────────────────────
+    // load() — берём из localStorage или используем дефолт
+    settings: load('ip_settings', {
+      // Данные ИП / ТОО (для АВР)
+      companyName:  '',        // "ИП Иванов Иван Иванович"
+      bin:          '',        // БИН/ИИН 12 цифр
+      address:      '',        // Юридический адрес
+      bankName:     '',        // Название банка
+      bankAccount:  '',        // Номер счёта (IBAN)
+      phone:        '',        // Телефон
+      email:        '',        // Email
 
-    // Список операций (доходов)
-    transactions: [
-      { id: 1, date: '2026-06-17', client: 'ООО "Алатау Трейд"',  amount: 350000, category: 'Услуги' },
-      { id: 2, date: '2026-06-15', client: 'ИП Джаксыбеков',      amount: 470000, category: 'Консалтинг' },
-      { id: 3, date: '2026-05-28', client: 'ТОО "Нур Технологии"', amount: 680000, category: 'Разработка' },
-      { id: 4, date: '2026-05-10', client: 'ООО "Степной ветер"',  amount: 220000, category: 'Услуги' },
-    ]
+      // Налоговые параметры
+      // Пользователь может изменить зарплатную базу:
+      // вместо МЗП 85 000 ₸ поставить свою сумму
+      salaryBase:   85000,     // База для расчёта ОПВ/СО/ВОСМС
+      taxRegime:    'simplified', // Режим: simplified = упрощёнка
+
+      // Ставки (можно будет расширить)
+      ipnRate:      3,         // ИПН % (для упрощёнки = 3%)
+      opvRate:      10,        // ОПВ %
+      soRate:       3.5,       // СО %
+      vosmcRate:    5,         // ВОСМС %
+    }),
+
+    // ── ОПЕРАЦИИ ───────────────────────────────
+    transactions: load('ip_transactions', [
+      { id: 1, date: '2026-06-17', client: 'ООО "Алатау Трейд"',   amount: 350000, category: 'Услуги'     },
+      { id: 2, date: '2026-06-15', client: 'ИП Джаксыбеков',       amount: 470000, category: 'Консалтинг' },
+      { id: 3, date: '2026-05-28', client: 'ТОО "Нур Технологии"', amount: 680000, category: 'Разработка'  },
+      { id: 4, date: '2026-05-10', client: 'ООО "Степной ветер"',  amount: 220000, category: 'Услуги'     },
+    ])
   }),
 
-  // ── GETTERS: вычисляемые значения ─────────────
   getters: {
+    // Данные ИП для удобства
+    ip: (state) => ({
+      name:   state.settings.companyName || 'Моё ИП',
+      bin:    state.settings.bin,
+      regime: 'Упрощённая декларация'
+    }),
+
+    // Зарплатная база из настроек (не фиксированный МЗП!)
+    salaryBase: (state) => state.settings.salaryBase,
+
     // Доход за текущий месяц
     monthlyIncome(state) {
       const now = new Date()
@@ -53,7 +85,7 @@ export const useFinanceStore = defineStore('finance', {
         .reduce((sum, t) => sum + t.amount, 0)
     },
 
-    // Общий доход за год
+    // Доход за год
     annualIncome(state) {
       const year = new Date().getFullYear()
       return state.transactions
@@ -61,48 +93,48 @@ export const useFinanceStore = defineStore('finance', {
         .reduce((sum, t) => sum + t.amount, 0)
     },
 
-    // ИПН = 3% от месячного дохода
-    monthlyTax() {
-      return Math.round(this.monthlyIncome * TAX_RATE)
+    // Налоги — теперь используют настройки пользователя
+    monthlyTax(state) {
+      return Math.round(this.monthlyIncome * (state.settings.ipnRate / 100))
     },
+    opv(state)   { return Math.round(state.settings.salaryBase * (state.settings.opvRate  / 100)) },
+    so(state)    { return Math.round(state.settings.salaryBase * (state.settings.soRate   / 100)) },
+    vosms(state) { return Math.round(state.settings.salaryBase * (state.settings.vosmcRate / 100)) },
 
-    // ОПВ = 10% от МЗП (обязательные пенсионные взносы)
-    opv() { return Math.round(MZP_2026 * 0.10) },
-
-    // СО = 3.5% от МЗП (социальные отчисления)
-    so()  { return Math.round(MZP_2026 * 0.035) },
-
-    // ВОСМС = 5% от МЗП (взносы на обязательное соц. мед. страхование)
-    vosms() { return Math.round(MZP_2026 * 0.05) },
-
-    // Итого платежей за месяц
     totalMonthlyPayments() {
       return this.monthlyTax + this.opv + this.so + this.vosms
     },
 
-    // Процент использования лимита
     annualLimitPercent() {
-      return Math.min(100, (this.annualIncome / ANNUAL_LIMIT_KZT) * 100)
+      const limit = ANNUAL_LIMIT_MRP * MRP_2026
+      return Math.min(100, (this.annualIncome / limit) * 100)
     },
 
-    annualLimitKZT: () => ANNUAL_LIMIT_KZT
+    annualLimitKZT: () => ANNUAL_LIMIT_MRP * MRP_2026
   },
 
-  // ── ACTIONS: изменение данных ──────────────────
   actions: {
-    addTransaction(transaction) {
+    // Сохраняем настройки — в store И в localStorage
+    saveSettings(newSettings) {
+      this.settings = { ...this.settings, ...newSettings }
+      save('ip_settings', this.settings)
+    },
+
+    addTransaction(tx) {
       const newTx = {
-        id: Date.now(),
-        date: transaction.date || new Date().toISOString().split('T')[0],
-        client: transaction.client,
-        amount: Number(transaction.amount),
-        category: transaction.category || 'Услуги'
+        id:       Date.now(),
+        date:     tx.date || new Date().toISOString().split('T')[0],
+        client:   tx.client,
+        amount:   Number(tx.amount),
+        category: tx.category || 'Услуги'
       }
-      this.transactions.unshift(newTx) // Добавляем в начало списка
+      this.transactions.unshift(newTx)
+      save('ip_transactions', this.transactions) // Сохраняем в localStorage
     },
 
     removeTransaction(id) {
       this.transactions = this.transactions.filter(t => t.id !== id)
+      save('ip_transactions', this.transactions)
     }
   }
 })
